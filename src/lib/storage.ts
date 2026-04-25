@@ -21,6 +21,7 @@ export interface HistoryItem {
 
 const HISTORY_KEY = 'wonderful_history';
 const USER_KEY = 'wonderful_user';
+const ACCOUNTS_KEY = 'wonderful_accounts';
 
 export const storage = {
   // User Management
@@ -31,10 +32,28 @@ export const storage = {
   
   saveUser: (user: User) => {
     localStorage.setItem(USER_KEY, JSON.stringify(user));
+    storage.saveAccount(user);
   },
   
   clearUser: () => {
     localStorage.removeItem(USER_KEY);
+  },
+
+  // Account Persistence (Google-like selector)
+  getAccounts: (): User[] => {
+    const data = localStorage.getItem(ACCOUNTS_KEY);
+    return data ? JSON.parse(data) : [];
+  },
+
+  saveAccount: (user: User) => {
+    const accounts = storage.getAccounts();
+    const existingIndex = accounts.findIndex(acc => acc.email === user.email);
+    if (existingIndex > -1) {
+      accounts[existingIndex] = user;
+    } else {
+      accounts.unshift(user);
+    }
+    localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(accounts.slice(0, 5))); // Keep last 5
   },
   
   // History Management
