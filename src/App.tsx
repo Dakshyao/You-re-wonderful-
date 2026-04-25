@@ -23,27 +23,11 @@ import {
 import { motion, AnimatePresence } from "motion/react";
 import { GoogleGenAI, ThinkingLevel } from "@google/genai";
 import { cn } from "@/src/lib/utils";
-import { 
-  auth, 
-  db, 
-  googleProvider, 
-  signInWithPopup, 
-  signOut, 
-  onAuthStateChanged, 
-  collection, 
-  addDoc, 
-  query, 
-  where, 
-  orderBy, 
-  onSnapshot, 
-  limit, 
-  Timestamp, 
-  deleteDoc, 
-  doc,
-  User
-} from "./firebase";
+import { storage, User as LocalUser, HistoryItem as LocalHistoryItem } from "./lib/storage";
 
 // Types
+type User = LocalUser;
+type HistoryItem = LocalHistoryItem;
 type AspectRatio = "1:1" | "3:4" | "4:3" | "9:16" | "16:9";
 type Lighting = "Soft Lighting" | "Hard Lighting" | "Golden hour" | "Backlighting" | "Neon Lighting";
 type CameraAngle = "Close angle shot" | "wide angle shot" | "over the shoulder shot" | "top view shot" | "High angle shot" | "low angle shot" | "eye level shot" | "dutch angle shot";
@@ -54,21 +38,6 @@ interface PhotoState {
   file: File | null;
   preview: string | null;
   base64: string | null;
-}
-
-interface HistoryItem {
-  id: string;
-  uid: string;
-  image: string;
-  prompt: string;
-  timestamp: number;
-  params: {
-    aspectRatio: AspectRatio;
-    lighting: Lighting;
-    cameraAngle: CameraAngle;
-    composition: Composition;
-    colorMood: ColorMood;
-  };
 }
 
 // Error Boundary Component
@@ -128,57 +97,6 @@ export default function App() {
       <AppContent />
     </ErrorBoundary>
   );
-}
-
-enum OperationType {
-  CREATE = 'create',
-  UPDATE = 'update',
-  DELETE = 'delete',
-  LIST = 'list',
-  GET = 'get',
-  WRITE = 'write',
-}
-
-interface FirestoreErrorInfo {
-  error: string;
-  operationType: OperationType;
-  path: string | null;
-  authInfo: {
-    userId: string | undefined;
-    email: string | null | undefined;
-    emailVerified: boolean | undefined;
-    isAnonymous: boolean | undefined;
-    tenantId: string | null | undefined;
-    providerInfo: {
-      providerId: string;
-      displayName: string | null;
-      email: string | null;
-      photoUrl: string | null;
-    }[];
-  }
-}
-
-function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
-  const errInfo: FirestoreErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
-    authInfo: {
-      userId: auth.currentUser?.uid,
-      email: auth.currentUser?.email,
-      emailVerified: auth.currentUser?.emailVerified,
-      isAnonymous: auth.currentUser?.isAnonymous,
-      tenantId: auth.currentUser?.tenantId,
-      providerInfo: auth.currentUser?.providerData.map(provider => ({
-        providerId: provider.providerId,
-        displayName: provider.displayName,
-        email: provider.email,
-        photoUrl: provider.photoURL
-      })) || []
-    },
-    operationType,
-    path
-  }
-  console.error('Firestore Error: ', JSON.stringify(errInfo));
-  throw new Error(JSON.stringify(errInfo));
 }
 
 function AppContent() {
@@ -246,46 +164,22 @@ function AppContent() {
 
   // Auth Listener
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
-      setUser(currentUser);
-      setIsAuthReady(true);
-    });
-    return () => unsubscribe();
+    const savedUser = storage.getUser();
+    if (savedUser) {
+      setUser(savedUser);
+    }
+    setIsAuthReady(true);
   }, []);
 
-  // Firestore History Listener
+  // History Listener (Local Storage)
   useEffect(() => {
-    if (!user || !isAuthReady) {
-      setHistory([]);
-      return;
-    }
-
-    const q = query(
-      collection(db, "history"),
-      where("uid", "==", user.uid),
-      orderBy("timestamp", "desc"),
-      limit(20)
-    );
-
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const items: HistoryItem[] = snapshot.docs.map(doc => {
-        const data = doc.data();
-        return {
-          id: doc.id,
-          uid: data.uid,
-          image: data.image,
-          prompt: data.prompt,
-          timestamp: data.timestamp?.toMillis() || Date.now(),
-          params: data.params
-        };
-      });
-      setHistory(items);
-    }, (err) => {
-      handleFirestoreError(err, OperationType.LIST, "history");
-    });
-
-    return () => unsubscribe();
-  }, [user, isAuthReady]);
+    if (!isAuthReady) return;
+    
+    // We use a "local" UID if not signed in, or the actual UID
+    const uid = user ? user.uid : "local";
+    const localHistory = storage.getHistory(uid);
+    setHistory(localHistory);
+  }, [user, isAuthReady, showHistory]); // Refresh when history is shown or user changes
 
   // Auth Actions
   const handleLogin = async () => {
@@ -295,16 +189,17 @@ function AppContent() {
     setError(null);
     
     try {
-      await signInWithPopup(auth, googleProvider);
+      // Create a mock user for local authentication
+      const mockUser: User = {
+        uid: "user_" + Math.random().toString(36).substring(2, 11),
+        displayName: "Wonderful User",
+        email: "user@example.com",
+        photoURL: null
+      };
+      setUser(mockUser);
+      storage.saveUser(mockUser);
     } catch (err: any) {
       console.error("Login Error:", err);
-      if (err.code === "auth/popup-closed-by-user") {
-        // Silent fail or gentle message for user closure
-        return;
-      }
-      if (err.code === "auth/cancelled-by-user") {
-        return;
-      }
       setError(`Sign in failed: ${err.message || "Unknown error"}`);
     } finally {
       setIsLoggingIn(false);
@@ -313,7 +208,8 @@ function AppContent() {
 
   const handleLogout = async () => {
     try {
-      await signOut(auth);
+      setUser(null);
+      storage.clearUser();
       setHistory([]);
       setShowHistory(false);
     } catch (err: any) {
@@ -506,46 +402,28 @@ function AppContent() {
           resultRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
         }, 100);
         
-        // Add to Firestore if logged in
-        if (user) {
-          try {
-            await addDoc(collection(db, "history"), {
-              uid: user.uid,
-              image: base64Image,
-              prompt: generatedPrompt,
-              timestamp: Timestamp.now(),
-              params: {
-                aspectRatio,
-                lighting,
-                cameraAngle,
-                composition,
-                colorMood
-              }
-            });
-            // Automatically show history when first item is added
-            if (history.length === 0) setShowHistory(true);
-          } catch (err) {
-            handleFirestoreError(err, OperationType.CREATE, "history");
+        // Add to Storage
+        const uid = user ? user.uid : "local";
+        const newItem: HistoryItem = {
+          id: (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') ? crypto.randomUUID() : Math.random().toString(36).substring(2, 11),
+          uid: uid,
+          image: base64Image,
+          prompt: generatedPrompt,
+          timestamp: Date.now(),
+          params: {
+            aspectRatio,
+            lighting,
+            cameraAngle,
+            composition,
+            colorMood
           }
-        } else {
-          // Fallback to local state for non-logged in users (won't persist across devices)
-          const newItem: HistoryItem = {
-            id: (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') ? crypto.randomUUID() : Math.random().toString(36).substring(2, 11),
-            uid: "local",
-            image: base64Image,
-            prompt: generatedPrompt,
-            timestamp: Date.now(),
-            params: {
-              aspectRatio,
-              lighting,
-              cameraAngle,
-              composition,
-              colorMood
-            }
-          };
-          setHistory(prev => [newItem, ...prev]);
-          if (history.length === 0) setShowHistory(true);
-        }
+        };
+        
+        storage.addHistoryItem(newItem);
+        setHistory(prev => [newItem, ...prev]);
+        
+        // Automatically show history when first item is added
+        if (history.length === 0) setShowHistory(true);
       } else {
         const textPart = response.candidates[0].content.parts.find(p => p.text);
         if (textPart?.text) {
@@ -651,22 +529,26 @@ function AppContent() {
                 <h2 className="text-2xl font-display font-bold">History</h2>
                 <div className="flex items-center gap-4">
                   {!user && (
-                    <span className="text-xs text-amber-500 bg-amber-500/10 px-2 py-1 rounded-lg">Sign in to sync across devices</span>
+                    <span className="text-xs text-amber-500 bg-amber-500/10 px-2 py-1 rounded-lg">Items stored locally in this browser</span>
                   )}
                   <button 
-                    onClick={async () => {
+                    onClick={() => {
                       if (user) {
-                        try {
-                          // Delete all items from Firestore
-                          for (const item of history) {
-                            await deleteDoc(doc(db, "history", item.id));
-                          }
-                        } catch (err) {
-                          handleFirestoreError(err, OperationType.DELETE, "history");
+                        // In mock mode, we just clear local for this user
+                        const data = localStorage.getItem('wonderful_history');
+                        if (data) {
+                          const allHistory = JSON.parse(data).filter((item: any) => item.uid !== user.uid);
+                          localStorage.setItem('wonderful_history', JSON.stringify(allHistory));
                         }
                       } else {
-                        setHistory([]);
+                        // Clear local-only items
+                        const data = localStorage.getItem('wonderful_history');
+                        if (data) {
+                          const allHistory = JSON.parse(data).filter((item: any) => item.uid !== "local");
+                          localStorage.setItem('wonderful_history', JSON.stringify(allHistory));
+                        }
                       }
+                      setHistory([]);
                     }}
                     className="text-sm text-zinc-500 hover:text-red-400 transition-colors"
                   >
