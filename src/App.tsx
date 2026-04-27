@@ -526,7 +526,14 @@ function AppContent() {
     setError(null);
     
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (!apiKey || apiKey === "undefined" || apiKey === "") {
+        setError("Gemini API key is missing. Please add 'GEMINI_API_KEY' to your environment variables in Vercel settings.");
+        setIsGeneratingPrompt(false);
+        return;
+      }
+      
+      const ai = new GoogleGenAI({ apiKey });
       
       const parts: any[] = [
         { text: `Generate a highly detailed, professional product photography prompt for an AI image generator. 
@@ -572,9 +579,10 @@ function AppContent() {
         fullText += chunk.text || "";
         setGeneratedPrompt(fullText);
       }
-    } catch (err) {
-      console.error(err);
-      setError("Failed to generate prompt. Please check your connection and try again.");
+    } catch (err: any) {
+      console.error("Gemini Error:", err);
+      const errorMessage = err?.message || "Failed to generate prompt. Please check your connection and API key.";
+      setError(`Gemini Error: ${errorMessage}`);
     } finally {
       setIsGeneratingPrompt(false);
     }
@@ -594,7 +602,14 @@ function AppContent() {
     setError(null);
 
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (!apiKey || apiKey === "undefined" || apiKey === "") {
+        setError("Gemini API key is missing. Please add 'GEMINI_API_KEY' to your environment variables in Vercel settings.");
+        setIsGeneratingImage(false);
+        return;
+      }
+      
+      const ai = new GoogleGenAI({ apiKey });
       
       const response = await ai.models.generateContent({
         model: "gemini-2.5-flash-image",
@@ -669,8 +684,16 @@ function AppContent() {
         throw new Error("No image data received from the model.");
       }
     } catch (err: any) {
-      console.error("Image Generation Error:", err);
-      setError(err.message || "Failed to generate image. The model might be busy or the request was blocked by safety filters.");
+      console.error("Gemini Image Error:", err);
+      let errorMessage = err?.message || "Failed to generate image.";
+      
+      if (err?.status === 429 || errorMessage.includes("429") || errorMessage.includes("Quota")) {
+        errorMessage = "Quota Exceeded: You have reached the limit for image generation on the Free Tier. Please wait a few minutes or check your Gemini API billing settings.";
+      } else if (errorMessage.includes("safety")) {
+        errorMessage = "Blocked by Safety Filters: The prompt or generated content was flagged by Gemini's safety settings.";
+      }
+      
+      setError(errorMessage);
     } finally {
       setIsGeneratingImage(false);
     }
