@@ -1,0 +1,33 @@
+{
+  "entities": {
+    "history": {
+      "title": "History",
+      "description": "Generated image history items",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "uid": { "type": "string" },
+        "image": { "type": "string", "description": "Base64 image data" },
+        "prompt": { "type": "string" },
+        "timestamp": { "type": "number" },
+        "params": {
+          "type": "object",
+          "properties": {
+            "aspectRatio": { "type": "string" },
+            "lighting": { "type": "string" },
+            "cameraAngle": { "type": "string" },
+            "composition": { "type": "string" },
+            "colorMood": { "type": "string" }
+          }
+        }
+      },
+      "required": ["id", "uid", "image", "prompt", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/history/{historyId}": {
+      "schema": "history",
+      "description": "Collection of all generated image history"
+    }
+  }
+}
