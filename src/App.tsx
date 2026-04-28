@@ -602,95 +602,58 @@ function AppContent() {
     setError(null);
 
     try {
-      const apiKey = process.env.GEMINI_API_KEY;
-      if (!apiKey || apiKey === "undefined" || apiKey === "") {
-        setError("Gemini API key is missing. Please add 'GEMINI_API_KEY' to your environment variables in Vercel settings.");
-        setIsGeneratingImage(false);
-        return;
-      }
+      // Use Pollinations AI for image generation (No API key required)
+      // We append a random seed to ensure unique results each time
+      const seed = Math.floor(Math.random() * 1000000);
+      const enhancedPrompt = `${generatedPrompt}. Professional product photography, studio lighting, high resolution, 8k.`;
+      const imageUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(enhancedPrompt)}?width=1024&height=1024&nologo=true&seed=${seed}&model=flux`;
       
-      const ai = new GoogleGenAI({ apiKey });
+      // Fetch the image and convert to base64 to store in history
+      const response = await fetch(imageUrl);
+      if (!response.ok) throw new Error("Failed to connect to image generation service.");
       
-      const response = await ai.models.generateContent({
-        model: "gemini-2.5-flash-image",
-        contents: {
-          parts: [
-            {
-              inlineData: {
-                data: productPhoto.base64,
-                mimeType: "image/jpeg"
-              }
-            },
-            { text: generatedPrompt }
-          ]
-        },
-        config: {
-          imageConfig: {
-            aspectRatio: aspectRatio as any
-          }
-        }
+      const blob = await response.blob();
+      const base64Image = await new Promise<string>((resolve) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result as string);
+        reader.readAsDataURL(blob);
       });
 
-      if (!response.candidates || response.candidates.length === 0) {
-        throw new Error("No candidates returned from AI model.");
-      }
-
-      const imagePart = response.candidates[0].content.parts.find(p => p.inlineData);
-      if (imagePart?.inlineData?.data) {
-        const originalBase64 = `data:image/png;base64,${imagePart.inlineData.data}`;
-        
-        // Compress image to stay under 1MB Firestore limit
-        let base64Image = originalBase64;
-        try {
-          base64Image = await compressImage(originalBase64);
-        } catch (compressErr) {
-          console.warn("Compression failed, using original:", compressErr);
+      setResultImage(base64Image);
+      
+      // Scroll to result
+      setTimeout(() => {
+        resultRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }, 100);
+      
+      // Add to Storage
+      const uid = user ? user.uid : "local";
+      const newItem: HistoryItem = {
+        id: (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') ? crypto.randomUUID() : Math.random().toString(36).substring(2, 11),
+        uid: uid,
+        image: base64Image,
+        prompt: generatedPrompt,
+        timestamp: Date.now(),
+        params: {
+          aspectRatio,
+          lighting,
+          cameraAngle,
+          composition,
+          colorMood
         }
+      };
+      
+      storage.addHistoryItem(newItem);
+      setHistory(prev => [newItem, ...prev]);
+      
+      if (history.length === 0) setShowHistory(true);
 
-        setResultImage(base64Image);
-        
-        // Scroll to result
-        setTimeout(() => {
-          resultRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        }, 100);
-        
-        // Add to Storage
-        const uid = user ? user.uid : "local";
-        const newItem: HistoryItem = {
-          id: (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') ? crypto.randomUUID() : Math.random().toString(36).substring(2, 11),
-          uid: uid,
-          image: base64Image,
-          prompt: generatedPrompt,
-          timestamp: Date.now(),
-          params: {
-            aspectRatio,
-            lighting,
-            cameraAngle,
-            composition,
-            colorMood
-          }
-        };
-        
-        storage.addHistoryItem(newItem);
-        setHistory(prev => [newItem, ...prev]);
-        
-        // Automatically show history when first item is added
-        if (history.length === 0) setShowHistory(true);
-      } else {
-        const textPart = response.candidates[0].content.parts.find(p => p.text);
-        if (textPart?.text) {
-          throw new Error(`AI returned text instead of image: ${textPart.text}`);
-        }
-        throw new Error("No image data received from the model.");
-      }
     } catch (err: any) {
-      console.error("Gemini Image Error:", err);
+      console.error("Image Generation Error:", err);
       let errorMessage = err?.message || "Failed to generate image.";
       
-      if (err?.status === 429 || errorMessage.includes("429") || errorMessage.includes("Quota")) {
-        errorMessage = "Quota Exceeded: You have reached the limit for image generation on the Free Tier. Please wait a few minutes or check your Gemini API billing settings.";
-      } else if (errorMessage.includes("safety")) {
-        errorMessage = "Blocked by Safety Filters: The prompt or generated content was flagged by Gemini's safety settings.";
+      if (errorMessage.includes("fetch")) {
+        errorMessage = "Connection Error: Could not reach the image service. Please check your internet.";
       }
       
       setError(errorMessage);
