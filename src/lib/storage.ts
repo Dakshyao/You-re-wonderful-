@@ -114,8 +114,23 @@ export const storage = {
     localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(accounts.slice(0, 5))); // Keep last 5
   },
   
-  // History Management (Firestore)
+  // History Management (Firestore + LocalStorage fallback)
   syncHistory: async (uid: string): Promise<HistoryItem[]> => {
+    if (uid === "local") {
+      const data = localStorage.getItem('wonderful_history');
+      if (data) {
+        try {
+          const items: HistoryItem[] = JSON.parse(data);
+          return items
+            .filter(item => item.uid === "local")
+            .sort((a, b) => b.timestamp - a.timestamp);
+        } catch (e) {
+          return [];
+        }
+      }
+      return [];
+    }
+
     const q = query(
       collection(db, HISTORY_COLLECTION),
       where("uid", "==", uid),
@@ -135,6 +150,23 @@ export const storage = {
   },
   
   addHistoryItem: async (item: HistoryItem) => {
+    // Always save to local storage as backup/local sync
+    const data = localStorage.getItem('wonderful_history');
+    let localHistory: HistoryItem[] = [];
+    if (data) {
+      try {
+        localHistory = JSON.parse(data);
+      } catch (e) {
+        localHistory = [];
+      }
+    }
+    localHistory.unshift(item);
+    localStorage.setItem('wonderful_history', JSON.stringify(localHistory));
+
+    if (item.uid === "local") {
+      return; // Do not call Firestore for local guest users
+    }
+
     try {
       await setDoc(doc(db, HISTORY_COLLECTION, item.id), item);
     } catch (error) {
@@ -143,10 +175,25 @@ export const storage = {
   },
   
   deleteHistoryItem: async (id: string) => {
-    try {
-      await deleteDoc(doc(db, HISTORY_COLLECTION, id));
-    } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, `${HISTORY_COLLECTION}/${id}`);
+    // Clean from local storage
+    const data = localStorage.getItem('wonderful_history');
+    if (data) {
+      try {
+        const localHistory: HistoryItem[] = JSON.parse(data);
+        const filtered = localHistory.filter(item => item.id !== id);
+        localStorage.setItem('wonderful_history', JSON.stringify(filtered));
+      } catch (e) {
+        // ignore
+      }
+    }
+
+    // Clean from Firestore if we are signed in
+    if (auth.currentUser) {
+      try {
+        await deleteDoc(doc(db, HISTORY_COLLECTION, id));
+      } catch (error) {
+        handleFirestoreError(error, OperationType.DELETE, `${HISTORY_COLLECTION}/${id}`);
+      }
     }
   }
 };
